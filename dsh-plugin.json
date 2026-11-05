@@ -14,7 +14,9 @@
     "contracts": []
   },
   "permissions": [],
-  "contributes": {},
+  "contributes": {
+    "commands": []
+  },
   "subscriptions": [],
   "license": "Apache-2.0"
 }
