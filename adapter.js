@@ -195,7 +195,7 @@ export class LlamaSwapAdapter extends LlmAdapter {
 		const apiKey = await this.resolveApiKey();
 		if (apiKey === undefined || apiKey.length === 0) {
 			throw new LlmError(
-				'no llama-swap credential: store LOCAL_API_KEY or set the plugin\'s apiKeyEnv',
+				'no llama-swap credential: store the credential named by the plugin\'s apiKeyEnv (or export it)',
 				'MISSING_CREDENTIAL',
 			);
 		}
