@@ -45,26 +45,34 @@ pnpm install
 Or, from a git checkout:
 
 ```bash
-dsh plugin add git+https://git.fedesito.me/fed/dsh-llama-swap.git
+dsh plugin add git+https://git.fedesito.me/fedes1to/dsh-llama-swap.git
 ```
 
 ## Configure
 
-The row is inserted with defaults; override them in
+Nothing about the deployment is compiled in. The row is inserted with an
+empty config; set the endpoint and the credential name in
 `~/.dsh/profiles/dsh-tui/cordis.patch.yml`:
 
 ```yaml
 - id: llama-swap
   config:
-    baseURL: http://ponga.ts.fedesito.me:8080/v1
-    apiKeyEnv: LOCAL_API_KEY
+    baseURL: http://llama-swap.example:8080/v1
+    apiKeyEnv: MY_LLAMA_SWAP_KEY
     catalogTTLms: 60000
 ```
+
+Resolution order, so a deployment can also come from the environment:
+
+| field | config | environment | fallback |
+| --- | --- | --- | --- |
+| `baseURL` | `baseURL` | `LLAMA_SWAP_BASE_URL` | `http://127.0.0.1:8080/v1` (llama-swap's own default listen address) |
+| `apiKeyEnv` | `apiKeyEnv` | `LLAMA_SWAP_API_KEY_ENV` | `LLAMA_SWAP_API_KEY` |
 
 `apiKeyEnv` is a credential reference resolved through the harness credential
 seam (`~/.dsh/.credentials.yaml`), falling back to the process environment.
 llama-swap's `/v1/models` answers `401 admin login required` without a key, so
-this is required.
+a key is required in practice.
 
 ## What it maps
 

@@ -75,7 +75,7 @@ export class LlamaSwapAdapter extends LlmAdapter {
 	/**
 	 * @param {object} options
 	 * @param {() => Promise<string | undefined>} options.resolveApiKey credential resolution for the route
-	 * @param {string} options.baseURL llama-swap OpenAI base, e.g. http://host:8080/v1
+	 * @param {string} options.baseURL llama-swap OpenAI base, e.g. http://<host>:8080/v1
 	 * @param {number} [options.catalogTTLms] catalog cache lifetime
 	 * @param {(message: string) => void} [options.debug] diagnostic sink
 	 */

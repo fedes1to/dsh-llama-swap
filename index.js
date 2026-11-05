@@ -25,14 +25,47 @@ export const name = 'llama-swap';
  */
 export const inject = ['llm', 'credentials'];
 
+/**
+ * No deployment values live in this schema: the endpoint and the credential
+ * name are supplied by the profile's config (or the environment), so the same
+ * package works against any llama-swap. `127.0.0.1:8080` is llama-swap's own
+ * default listen address, used only when neither is set.
+ */
 export const Config = z.object({
 	/** Environment-variable name the llama-swap API key is stored under. */
-	apiKeyEnv: z.string().role('credential-ref').default('LOCAL_API_KEY'),
+	apiKeyEnv: z.string().role('credential-ref'),
 	/** llama-swap's OpenAI base URL (the `/v1` suffix included). */
-	baseURL: z.string().default('http://ponga.ts.fedesito.me:8080/v1'),
+	baseURL: z.string(),
 	/** How long a fetched catalog answers follow-up lookups, in ms. */
 	catalogTTLms: z.number().min(1000).default(60_000),
 });
+
+/** llama-swap's default listen address, used only when nothing else says. */
+const DEFAULT_BASE_URL = 'http://127.0.0.1:8080/v1';
+
+/** The credential name used only when the profile names none. */
+const DEFAULT_API_KEY_ENV = 'LLAMA_SWAP_API_KEY';
+
+/**
+ * Resolve the endpoint: profile config, then `LLAMA_SWAP_BASE_URL`, then
+ * llama-swap's own default listen address.
+ * @param {object} config plugin config
+ * @param {NodeJS.ProcessEnv} env process environment
+ */
+export function resolveBaseURL(config, env) {
+	const configured = config.baseURL ?? env.LLAMA_SWAP_BASE_URL ?? DEFAULT_BASE_URL;
+	return String(configured).replace(/\/+$/, '');
+}
+
+/**
+ * Resolve the credential reference: profile config, then
+ * `LLAMA_SWAP_API_KEY_ENV`, then a plugin-named default.
+ * @param {object} config plugin config
+ * @param {NodeJS.ProcessEnv} env process environment
+ */
+export function resolveApiKeyEnv(config, env) {
+	return config.apiKeyEnv ?? env.LLAMA_SWAP_API_KEY_ENV ?? DEFAULT_API_KEY_ENV;
+}
 
 /**
  * Wire the provider into the running harness.
@@ -40,8 +73,8 @@ export const Config = z.object({
  * @param {object} config the resolved plugin config
  */
 export function apply(ctx, config) {
-	const apiKeyEnv = config.apiKeyEnv ?? 'LOCAL_API_KEY';
-	const baseURL = (config.baseURL ?? 'http://ponga.ts.fedesito.me:8080/v1').replace(/\/+$/, '');
+	const apiKeyEnv = resolveApiKeyEnv(config, process.env);
+	const baseURL = resolveBaseURL(config, process.env);
 
 	/** Resolve the route's key from the credential seam, then ambient env. */
 	const resolveApiKey = async () => {
@@ -64,11 +97,15 @@ export function apply(ctx, config) {
 	});
 
 	ctx.llm.registerAdapter([PROVIDER_ID], adapter);
+	// The settings namespace is the profile row's own id, not a literal: a
+	// deployment that mounts this plugin under another id keeps one address
+	// for its settings page and its configurable-provider directory entry.
+	const settingsNs = ctx.fiber?.entry?.options?.id ?? 'llama-swap';
 	ctx.llm.registerConfigurableProviders([
 		{
 			provider: PROVIDER_ID,
 			displayName: 'llama-swap',
-			settingsNs: 'llama-swap',
+			settingsNs,
 			settingsPath: [],
 			declared: false,
 			defaultBaseURL: baseURL,
