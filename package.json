@@ -1,0 +1,42 @@
+{
+  "name": "dsh-llama-swap",
+  "version": "0.1.0",
+  "description": "llama-swap provider for dsh — the model catalog and per-model reasoning efforts come from GET /v1/models instead of a hand-maintained list",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "adapter.js",
+    "wire.js",
+    "cordis.patch.yml",
+    "dsh-plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0",
+    "@deepseek-ai/dsh-credentials": ">=0.1.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0",
+    "@deepseek-ai/schemastery": ">=3.18.0"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "llama-swap",
+    "vllm",
+    "reasoning-effort"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,5 @@
+# dsh-llama-swap bundle patch: one insert mounts the host half.
+- insert:
+    - id: llama-swap
+      name: 'dsh-llama-swap'
+      config: {}
