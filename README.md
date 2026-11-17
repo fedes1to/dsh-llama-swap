@@ -80,6 +80,7 @@ a key is required in practice.
 | --- | --- |
 | `id`, `name` | picker entry |
 | `context_length` / `context_window` | context window |
+| `architecture.input_modalities` (or `capabilities.vision`) | `inputModalities` — `in: [text, image]` in config.d is what makes `read_image` work |
 | `capabilities.function_calling` | tools |
 | `meta.llamaswap.reasoning.efforts` | selectable efforts (+ `off`, which sends `enable_thinking: false`) |
 | `meta.llamaswap.reasoning.default` | `defaultEffort` |
@@ -91,8 +92,15 @@ thinking is toggled with `chat_template_kwargs.enable_thinking`.
 
 ## Limits
 
-- **Text only.** Image blocks are dropped (the attachment seam hands adapters
-  a reference, not bytes; this adapter does not resolve them).
+- **Vision is opt-in per model.** A model declared `in: [text, image]` in
+  llama-swap config.d gets its images through: the harness gates `read_image`
+  on the catalog's `inputModalities`, and each live image block rides the
+  wire as an OpenAI `image_url` data URL. That needs the durable attachment
+  service injected into the composition (`attachments`) — without it a
+  request carrying images fails with `UNSUPPORTED_CONTENT` rather than
+  silently dropping the picture. Engines that are not vision-armed
+  (no `VISION=1` in the launcher) will reject the pixels server-side even
+  though the catalog advertises them.
 - **Assistant reasoning is not replayed** in history — the OpenAI shape has no
   field for it, and vLLM's template re-derives thinking from the prompt.
 - The catalog is cached for `catalogTTLms`; a model added to llama-swap shows
