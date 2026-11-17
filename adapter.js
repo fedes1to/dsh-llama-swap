@@ -4,9 +4,12 @@
  *
  * llama-swap already publishes everything the model picker needs per entry:
  * `name`, `description`, `context_length`, `capabilities.function_calling`,
- * and — the reason this plugin exists — `meta.llamaswap.reasoning.efforts`
- * (plus `default` and `toggle`). Adding a model to config.d therefore makes
- * its reasoning efforts appear in the TUI with no client-side edit.
+ * the input modalities (`architecture.input_modalities`, mirrored as the
+ * `vision` capability), and — the reason this plugin exists —
+ * `meta.llamaswap.reasoning.efforts` (plus `default` and `toggle`). Adding
+ * a model to config.d therefore makes its reasoning efforts appear in the
+ * TUI with no client-side edit; declaring `in: [text, image]` there is what
+ * makes image reads work on it.
  *
  * The wire is OpenAI-compatible chat completions: vLLM behind llama-swap
  * streams `delta.content`, `delta.reasoning_content` (the qwen3 reasoning
@@ -36,6 +39,21 @@ const CATALOG_TIMEOUT_MS = 5_000;
 /** Capitalize an effort id for display. */
 function effortName(id) {
 	return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/**
+ * Whether any message in a request carries a non-offloaded image block.
+ * Offloaded occurrences already arrived as placeholder text, so only live
+ * blocks matter for the capability gate.
+ * @param {Array<object>} messages harness request messages
+ * @returns {boolean}
+ */
+function requestHasImage(messages) {
+	return messages.some(
+		(message) =>
+			Array.isArray(message.content) &&
+			message.content.some((block) => block.type === 'image' && block.offloaded !== true),
+	);
 }
 
 /** Map an OpenAI finish reason onto the harness vocabulary. */
@@ -69,6 +87,23 @@ function label(...candidates) {
 }
 
 /**
+ * The input modalities the harness should believe for one catalog entry.
+ * llama-swap publishes them in the OpenAI-shaped `architecture` block and
+ * mirrors image input as `capabilities.vision`. Text is implicit; an entry
+ * with neither signal gets no modality list at all, which the harness
+ * treats as text-only.
+ * @param {object} entry raw /v1/models listing entry
+ * @returns {string[] | undefined} e.g. ['text', 'image']
+ */
+function inputModalities(entry) {
+	const declared = Array.isArray(entry?.architecture?.input_modalities)
+		? entry.architecture.input_modalities
+		: [];
+	const image = declared.includes('image') || entry?.capabilities?.vision === true;
+	return image ? ['text', 'image'] : undefined;
+}
+
+/**
  * The llama-swap provider: live catalog, OpenAI-compatible streaming.
  */
 export class LlamaSwapAdapter extends LlmAdapter {
@@ -78,13 +113,17 @@ export class LlamaSwapAdapter extends LlmAdapter {
 	 * @param {string} options.baseURL llama-swap OpenAI base, e.g. http://<host>:8080/v1
 	 * @param {number} [options.catalogTTLms] catalog cache lifetime
 	 * @param {(message: string) => void} [options.debug] diagnostic sink
+	 * @param {object} [options.attachments] durable attachment store, needed to
+	 *   turn image blocks into request bytes; absent leaves images unsendable
+	 *   even when the catalog says the model takes them
 	 */
-	constructor({ resolveApiKey, baseURL, catalogTTLms = DEFAULT_TTL_MS, debug } = {}) {
+	constructor({ resolveApiKey, baseURL, catalogTTLms = DEFAULT_TTL_MS, debug, attachments } = {}) {
 		super();
 		this.resolveApiKey = resolveApiKey;
 		this.baseURL = String(baseURL ?? '').replace(/\/+$/, '');
 		this.catalogTTLms = catalogTTLms;
 		this.debug = debug ?? (() => {});
+		this.attachments = attachments;
 		/** @type {{ at: number, models: Array<object> } | undefined} */
 		this.catalogCache;
 	}
@@ -132,6 +171,12 @@ export class LlamaSwapAdapter extends LlmAdapter {
 					efforts,
 					defaultEffort: label(reasoning?.default),
 					tools: entry?.capabilities?.function_calling === true,
+					// llama-swap advertises input modalities in the OpenAI-shaped
+					// `architecture` block and mirrors image input as the
+					// `vision` capability. The harness gates image reads on
+					// this list, so a vision model without it silently
+					// degrades every read_image to a text-only placeholder.
+					inputModalities: inputModalities(entry),
 				});
 			}
 			if (models.length === 0) throw new Error('empty catalog');
@@ -153,6 +198,7 @@ export class LlamaSwapAdapter extends LlmAdapter {
 			provider: PROVIDER_ID,
 			id: entry.id,
 			name: entry.name,
+			...(entry.inputModalities !== undefined ? { inputModalities: entry.inputModalities } : {}),
 		}));
 	}
 
@@ -181,8 +227,27 @@ export class LlamaSwapAdapter extends LlmAdapter {
 			id: model,
 			name: entry?.name ?? model,
 			...(entry?.contextWindow !== undefined ? { context: { contextWindow: entry.contextWindow } } : {}),
+			...(entry?.inputModalities !== undefined ? { inputModalities: entry.inputModalities } : {}),
 			...(reasoning !== undefined ? { reasoning } : {}),
 		};
+	}
+
+	/**
+	 * Project one harness image block onto the OpenAI `image_url` content
+	 * part vLLM accepts: a data URL of the stored bytes. Offloaded
+	 * occurrences never reach here — the wire layer represents those as
+	 * text.
+	 * @param {object} block harness image block
+	 * @param {AbortSignal} [signal] request cancellation
+	 * @returns {Promise<object | undefined>} wire content part, or undefined
+	 *   when this route has no attachment store to read the image from
+	 */
+	async imagePart(block, signal) {
+		if (this.attachments === undefined) return undefined;
+		const stored = await this.attachments.readImage(block.attachment, signal);
+		const mediaType = stored.ref?.mediaType ?? block.attachment?.mediaType ?? 'image/png';
+		const base64 = Buffer.from(stored.data).toString('base64');
+		return { type: 'image_url', image_url: { url: `data:${mediaType};base64,${base64}` } };
 	}
 
 	/**
@@ -204,9 +269,32 @@ export class LlamaSwapAdapter extends LlmAdapter {
 		const effort = options.reasoningEffort;
 		const thinking = supportsReasoning && effort !== OFF_EFFORT;
 
+		// A request carrying a live image block must go to a model the
+		// catalog declares image-capable, through a route with the durable
+		// attachment store. Failing loud beats silently dropping the
+		// picture into a text-only wire.
+		const hasImage = requestHasImage(options.messages);
+		if (hasImage) {
+			if (entry?.inputModalities?.includes('image') !== true) {
+				throw new LlmError(
+					`llama-swap model "${options.model}" does not declare image input`,
+					'UNSUPPORTED_CONTENT',
+				);
+			}
+			if (this.attachments === undefined) {
+				throw new LlmError(
+					'llama-swap image input requires the durable attachment service',
+					'UNSUPPORTED_CONTENT',
+				);
+			}
+		}
+
 		const body = {
 			model: options.model,
-			messages: toWireMessages(options.messages),
+			messages: await toWireMessages(
+				options.messages,
+				hasImage ? (block) => this.imagePart(block, options.signal) : undefined,
+			),
 			stream: true,
 			stream_options: { include_usage: true },
 		};

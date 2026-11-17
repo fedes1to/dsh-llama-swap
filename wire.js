@@ -42,14 +42,46 @@ function assistantWire(message) {
 }
 
 /**
+ * One user harness message as the wire carries it: a plain string when it
+ * has no image blocks, or an OpenAI content-parts array (text part plus one
+ * `image_url` data-URL part per image) when `resolveImage` can project the
+ * blocks. Offloaded image occurrences arrive already replaced with
+ * placeholder text by the harness, so only live blocks reach here; an image
+ * that `resolveImage` rejects degrades the message to text rather than
+ * failing the request.
+ * @param {string | Array<object>} content harness user content
+ * @param {(block: object) => Promise<object | undefined>} [resolveImage]
+ *   projects one harness image block onto a wire content part
+ * @returns {Promise<string | Array<object>>} wire content
+ */
+async function userContent(content, resolveImage) {
+	if (typeof content === 'string') return content;
+	const text = blocksText(content);
+	const images = (content ?? []).filter((block) => block.type === 'image' && block.offloaded !== true);
+	if (images.length === 0 || resolveImage === undefined) return text;
+	const parts = [];
+	if (text.length > 0) parts.push({ type: 'text', text });
+	for (const block of images) {
+		const part = await resolveImage(block);
+		if (part !== undefined) parts.push(part);
+	}
+	return parts.length > 0 ? parts : text;
+}
+
+/**
  * Translate harness messages into OpenAI chat-completions messages.
  *
  * System and developer prompts collapse into one leading `system` message.
- * Tool results map to the `tool` role with the call id they answer.
+ * Tool results map to the `tool` role with the call id they answer. A user
+ * message carrying images becomes the OpenAI multimodal part array when
+ * `resolveImage` is supplied; without it, every message flattens to the
+ * plain string form the route always sent.
  * @param {Array<object>} messages harness request messages
- * @returns {Array<object>} wire messages
+ * @param {(block: object) => Promise<object | undefined>} [resolveImage]
+ *   image-block projection; absent means images cannot be sent
+ * @returns {Promise<Array<object>>} wire messages
  */
-export function toWireMessages(messages) {
+export async function toWireMessages(messages, resolveImage) {
 	const wire = [];
 	const systemTexts = [];
 	for (const message of messages) {
@@ -60,7 +92,7 @@ export function toWireMessages(messages) {
 				break;
 			}
 			case 'user': {
-				wire.push({ role: 'user', content: blocksText(message.content) });
+				wire.push({ role: 'user', content: await userContent(message.content, resolveImage) });
 				break;
 			}
 			case 'assistant': {

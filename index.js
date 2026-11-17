@@ -94,6 +94,12 @@ export function apply(ctx, config) {
 		baseURL,
 		catalogTTLms: config.catalogTTLms ?? 60_000,
 		debug: (message) => ctx.logger.debug(message),
+		// The durable attachment store is what turns an image block into
+		// request bytes. Read softly like the footer: a headless
+		// composition without it still activates, and image requests fail
+		// with a clear UNSUPPORTED_CONTENT instead of silently dropping
+		// the picture.
+		attachments: ctx.get('attachments', false) ?? undefined,
 	});
 
 	ctx.llm.registerAdapter([PROVIDER_ID], adapter);
