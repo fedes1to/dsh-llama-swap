@@ -48,11 +48,19 @@ Or, from a git checkout:
 dsh plugin add git+https://git.fedesito.me/fedes1to/dsh-llama-swap.git
 ```
 
+## Settings
+
+On the web client the plugin adds a **llama-swap** section to Settings. It
+edits the same three fields as the patch below — server URL, the credential
+variable name (not the key), and the catalog cache — and a save takes effect
+on the next request, without a restart. A deployment that never composed the
+plugin shows no section.
+
 ## Configure
 
 Nothing about the deployment is compiled in. The row is inserted with an
 empty config; set the endpoint and the credential name in
-`~/.dsh/profiles/dsh-tui/cordis.patch.yml`:
+`~/.dsh/profiles/dsh-tui/cordis.patch.yml`, or use the Settings section:
 
 ```yaml
 - id: llama-swap

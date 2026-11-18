@@ -120,12 +120,43 @@ export class LlamaSwapAdapter extends LlmAdapter {
 	constructor({ resolveApiKey, baseURL, catalogTTLms = DEFAULT_TTL_MS, debug, attachments } = {}) {
 		super();
 		this.resolveApiKey = resolveApiKey;
-		this.baseURL = String(baseURL ?? '').replace(/\/+$/, '');
-		this.catalogTTLms = catalogTTLms;
+		// A function is a live settings read: the Settings page writes a
+		// volatile field, and the next catalog fetch or completion must use
+		// it without a restart. A string is the value captured at
+		// construction, which is what tests and headless callers pass.
+		this.readBaseURL = typeof baseURL === 'function' ? baseURL : () => baseURL;
+		this.readCatalogTTLms = typeof catalogTTLms === 'function' ? catalogTTLms : () => catalogTTLms;
+		this.baseURL = this.normalizeBaseURL(this.readBaseURL());
+		this.catalogTTLms = this.normalizeTTL(this.readCatalogTTLms());
 		this.debug = debug ?? (() => {});
 		this.attachments = attachments;
 		/** @type {{ at: number, models: Array<object> } | undefined} */
 		this.catalogCache;
+	}
+
+	/** Drop a trailing slash so `${baseURL}/models` never doubles it. */
+	normalizeBaseURL(baseURL) {
+		return String(baseURL ?? '').replace(/\/+$/, '');
+	}
+
+	/** A non-positive TTL would refetch on every lookup; keep the last good one. */
+	normalizeTTL(catalogTTLms) {
+		return typeof catalogTTLms === 'number' && catalogTTLms >= 1000 ? catalogTTLms : DEFAULT_TTL_MS;
+	}
+
+	/**
+	 * Pick up a settings write. A changed endpoint or TTL drops the cached
+	 * catalog, so the picker does not keep serving the previous server's
+	 * models for the remainder of the old TTL.
+	 */
+	refreshEndpoint() {
+		const baseURL = this.normalizeBaseURL(this.readBaseURL());
+		const catalogTTLms = this.normalizeTTL(this.readCatalogTTLms());
+		if (baseURL !== this.baseURL || catalogTTLms !== this.catalogTTLms) {
+			this.catalogCache = undefined;
+		}
+		this.baseURL = baseURL;
+		this.catalogTTLms = catalogTTLms;
 	}
 
 	providerInfo(provider) {
@@ -139,6 +170,7 @@ export class LlamaSwapAdapter extends LlmAdapter {
 	 * @returns {Promise<Array<object>>} normalized entries
 	 */
 	async catalog() {
+		this.refreshEndpoint();
 		if (this.catalogCache !== undefined && Date.now() - this.catalogCache.at < this.catalogTTLms) {
 			return this.catalogCache.models;
 		}

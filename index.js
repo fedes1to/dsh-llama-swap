@@ -32,12 +32,19 @@ export const inject = ['llm', 'credentials'];
  * default listen address, used only when neither is set.
  */
 export const Config = z.object({
-	/** Environment-variable name the llama-swap API key is stored under. */
-	apiKeyEnv: z.string().role('credential-ref'),
-	/** llama-swap's OpenAI base URL (the `/v1` suffix included). */
-	baseURL: z.string(),
+	/**
+	 * Environment-variable name the llama-swap API key is stored under.
+	 * Volatile so the Settings page can retarget the credential without a
+	 * restart; the adapter resolves it on every request.
+	 */
+	apiKeyEnv: z.string().role('credential-ref').volatile(),
+	/**
+	 * llama-swap's OpenAI base URL (the `/v1` suffix included). Volatile so
+	 * the Settings page's save takes effect on the next request.
+	 */
+	baseURL: z.string().volatile(),
 	/** How long a fetched catalog answers follow-up lookups, in ms. */
-	catalogTTLms: z.number().min(1000).default(60_000),
+	catalogTTLms: z.number().min(1000).default(60_000).volatile(),
 });
 
 /** llama-swap's default listen address, used only when nothing else says. */
@@ -52,8 +59,18 @@ const DEFAULT_API_KEY_ENV = 'LLAMA_SWAP_API_KEY';
  * @param {object} config plugin config
  * @param {NodeJS.ProcessEnv} env process environment
  */
+/**
+ * Read one config field, following a volatile reference when the settings
+ * service wrapped it. A plain value (tests, a host without settings) passes
+ * through.
+ * @param {unknown} value field value or volatile reference
+ */
+export function readConfig(value) {
+	return value !== null && typeof value === 'object' && typeof value.get === 'function' ? value.get() : value;
+}
+
 export function resolveBaseURL(config, env) {
-	const configured = config.baseURL ?? env.LLAMA_SWAP_BASE_URL ?? DEFAULT_BASE_URL;
+	const configured = readConfig(config.baseURL) ?? env.LLAMA_SWAP_BASE_URL ?? DEFAULT_BASE_URL;
 	return String(configured).replace(/\/+$/, '');
 }
 
@@ -64,7 +81,7 @@ export function resolveBaseURL(config, env) {
  * @param {NodeJS.ProcessEnv} env process environment
  */
 export function resolveApiKeyEnv(config, env) {
-	return config.apiKeyEnv ?? env.LLAMA_SWAP_API_KEY_ENV ?? DEFAULT_API_KEY_ENV;
+	return readConfig(config.apiKeyEnv) ?? env.LLAMA_SWAP_API_KEY_ENV ?? DEFAULT_API_KEY_ENV;
 }
 
 /**
@@ -73,26 +90,33 @@ export function resolveApiKeyEnv(config, env) {
  * @param {object} config the resolved plugin config
  */
 export function apply(ctx, config) {
-	const apiKeyEnv = resolveApiKeyEnv(config, process.env);
-	const baseURL = resolveBaseURL(config, process.env);
+	// Resolved per call, not once at activation: a Settings save updates the
+	// volatile reference, and the next catalog fetch or completion must see
+	// it. The registration log records the value at activation only.
+	const apiKeyEnv = () => resolveApiKeyEnv(config, process.env);
+	const baseURL = () => resolveBaseURL(config, process.env);
 
 	/** Resolve the route's key from the credential seam, then ambient env. */
 	const resolveApiKey = async () => {
+		const envName = apiKeyEnv();
 		const credentials = ctx.get('credentials');
 		if (credentials !== undefined) {
-			const resolved = await credentials.resolve(credentialRef(apiKeyEnv));
+			const resolved = await credentials.resolve(credentialRef(envName));
 			if (resolved?.value !== undefined) {
-				return assertUsableApiKey(resolved.value, 'dsh-llama-swap', apiKeyEnv);
+				return assertUsableApiKey(resolved.value, 'dsh-llama-swap', envName);
 			}
 		}
-		const ambient = process.env[apiKeyEnv];
+		const ambient = process.env[envName];
 		return ambient !== undefined && ambient.length > 0 ? ambient : undefined;
 	};
 
 	const adapter = new LlamaSwapAdapter({
 		resolveApiKey,
 		baseURL,
-		catalogTTLms: config.catalogTTLms ?? 60_000,
+		catalogTTLms: () => {
+			const configured = readConfig(config.catalogTTLms);
+			return typeof configured === 'number' ? configured : 60_000;
+		},
 		debug: (message) => ctx.logger.debug(message),
 		// The durable attachment store is what turns an image block into
 		// request bytes. Read softly like the footer: a headless
@@ -114,10 +138,10 @@ export function apply(ctx, config) {
 			settingsNs,
 			settingsPath: [],
 			declared: false,
-			defaultBaseURL: baseURL,
-			nativeAuth: { env: [apiKeyEnv] },
+			defaultBaseURL: baseURL(),
+			nativeAuth: { env: [apiKeyEnv()] },
 		},
 	]);
 
-	ctx.logger.info(`llama-swap: provider registered (${baseURL}, key ${apiKeyEnv})`);
+	ctx.logger.info(`llama-swap: provider registered (${baseURL()}, key ${apiKeyEnv()})`);
 }
